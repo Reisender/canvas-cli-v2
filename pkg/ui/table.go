@@ -17,7 +17,8 @@ type MultiSelectionCallback func(rows []table.Row)
 // TableModel represents a table UI model
 type TableModel struct {
 	table           table.Model
-	selectionTable  table.Model // Separate table for multi-selection view
+	baseRows        []table.Row    // Original rows without selection indicators
+	baseColumns     []table.Column // Original columns without selection column
 	Title           string
 	Help            string
 	OnSelect        SelectionCallback
@@ -28,8 +29,17 @@ type TableModel struct {
 
 // NewTableModel creates a new table model
 func NewTableModel(t table.Model) *TableModel {
+	// Store original rows and columns
+	baseRows := make([]table.Row, len(t.Rows()))
+	copy(baseRows, t.Rows())
+
+	baseColumns := make([]table.Column, len(t.Columns()))
+	copy(baseColumns, t.Columns())
+
 	return &TableModel{
 		table:           t,
+		baseRows:        baseRows,
+		baseColumns:     baseColumns,
 		Title:           "Table",
 		Help:            "↑/↓: Navigate • enter: Select • q: Quit",
 		selectedRows:    make(map[int]bool),
@@ -80,49 +90,54 @@ func (m *TableModel) ToggleRow() {
 		m.selectedRows[currentIndex] = true
 	}
 
-	// Update selection table if it exists
+	// Update the table rows to reflect selection changes
 	if m.multiSelectMode {
-		m.updateSelectionTable()
+		m.updateTableWithSelectionIndicators()
 	}
 }
 
-// updateSelectionTable creates or updates the selection table
-func (m *TableModel) updateSelectionTable() {
-	rows := m.table.Rows()
+// updateTableWithSelectionIndicators updates the main table to show selection indicators
+func (m *TableModel) updateTableWithSelectionIndicators() {
+	// Keep track of the current cursor position
 	cursorPos := m.table.Cursor()
 
-	// Build columns with an extra selection column
-	columns := []table.Column{
-		{Title: "", Width: 2},
-	}
-	for _, col := range m.table.Columns() {
-		columns = append(columns, col)
-	}
+	// Get current table dimensions
+	height := m.table.Height()
+	height = 100
 
 	// Create new rows with checkmarks
-	newRows := make([]table.Row, len(rows))
-	for i, row := range rows {
+	newRows := make([]table.Row, len(m.baseRows))
+	for i, row := range m.baseRows {
 		// If selected, add a checkmark as the first element
 		indicator := ""
 		if m.IsRowSelected(i) {
 			indicator = "✓"
 		}
 
+		// Create a new row with the selection indicator plus all original data
 		newRow := make(table.Row, len(row)+1)
 		newRow[0] = indicator
-		copy(newRow[1:], row)
+		for j, cell := range row {
+			newRow[j+1] = cell
+		}
 		newRows[i] = newRow
 	}
 
-	// Create the new table
+	// Create a columns slice with selection column
+	columns := []table.Column{
+		{Title: "", Width: 2},
+	}
+	columns = append(columns, m.baseColumns...)
+
+	// Create a new table with the updated data but preserving other settings
 	newTable := table.New(
 		table.WithColumns(columns),
 		table.WithRows(newRows),
 		table.WithFocused(true),
-		table.WithHeight(m.table.Height()),
+		table.WithHeight(height),
 	)
 
-	// Apply styles
+	// Apply default styles since we can't access the existing styles directly
 	tableStyles := table.DefaultStyles()
 	tableStyles.Header = tableStyles.Header.
 		BorderStyle(lipgloss.NormalBorder()).
@@ -138,18 +153,17 @@ func (m *TableModel) updateSelectionTable() {
 	// Set cursor to match original table
 	newTable.SetCursor(cursorPos)
 
-	// Save the selection table
-	m.selectionTable = newTable
+	// Replace the existing table
+	m.table = newTable
 }
 
 // GetSelectedRows returns all selected rows
 func (m TableModel) GetSelectedRows() []table.Row {
 	var selected []table.Row
-	rows := m.table.Rows()
 
-	for i := range rows {
+	for i, row := range m.baseRows {
 		if m.selectedRows[i] {
-			selected = append(selected, rows[i])
+			selected = append(selected, row)
 		}
 	}
 
@@ -158,13 +172,13 @@ func (m TableModel) GetSelectedRows() []table.Row {
 
 // SelectAll selects all rows
 func (m *TableModel) SelectAll() {
-	for i := range m.table.Rows() {
+	for i := range m.baseRows {
 		m.selectedRows[i] = true
 	}
 
-	// Update selection table
+	// Update the table rows to reflect selection changes
 	if m.multiSelectMode {
-		m.updateSelectionTable()
+		m.updateTableWithSelectionIndicators()
 	}
 }
 
@@ -172,9 +186,9 @@ func (m *TableModel) SelectAll() {
 func (m *TableModel) ClearSelections() {
 	m.selectedRows = make(map[int]bool)
 
-	// Update selection table
+	// Update the table rows to reflect selection changes
 	if m.multiSelectMode {
-		m.updateSelectionTable()
+		m.updateTableWithSelectionIndicators()
 	}
 }
 
@@ -182,7 +196,37 @@ func (m *TableModel) ClearSelections() {
 func (m *TableModel) EnableMultiSelect() {
 	m.multiSelectMode = true
 	m.Help = "↑/↓: Navigate • space: Select/Deselect • a: Select All • enter: Perform Action on Selected • q: Quit"
-	m.updateSelectionTable()
+
+	// Create a fixed-height table
+	fixedHeight := 100 // Use a consistent height value
+	newTable := table.New(
+		table.WithColumns(m.table.Columns()),
+		table.WithRows(m.table.Rows()),
+		table.WithFocused(true),
+		table.WithHeight(fixedHeight),
+	)
+
+	// Copy styles
+	tableStyles := table.DefaultStyles()
+	tableStyles.Header = tableStyles.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		BorderBottom(true).
+		Bold(true)
+	tableStyles.Selected = tableStyles.Selected.
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57")).
+		Bold(true)
+	newTable.SetStyles(tableStyles)
+
+	// Preserve cursor position
+	newTable.SetCursor(m.table.Cursor())
+
+	// Update the main table
+	m.table = newTable
+
+	// Then add selection indicators
+	m.updateTableWithSelectionIndicators()
 }
 
 // Update updates the table model
@@ -205,10 +249,12 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if m.multiSelectMode && len(m.selectedRows) > 0 && m.OnMultiSelect != nil {
+				// Return only the original row data without selection indicators
 				m.OnMultiSelect(m.GetSelectedRows())
 				return m, nil
 			} else if !m.multiSelectMode && m.OnSelect != nil && len(m.table.Rows()) > 0 {
 				selectedRow := m.table.SelectedRow()
+				// For single selection, return the raw selected row
 				m.OnSelect(selectedRow)
 			}
 			return m, nil
@@ -217,12 +263,6 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Update the main table
 	m.table, cmd = m.table.Update(msg)
-
-	// If in multi-select mode, also update the selection table's cursor
-	if m.multiSelectMode {
-		// Transfer cursor position from main table to selection table
-		m.selectionTable.SetCursor(m.table.Cursor())
-	}
 
 	return m, cmd
 }
@@ -238,11 +278,8 @@ func (m TableModel) View() string {
 				fmt.Sprintf("%d items selected", len(m.selectedRows))) + "\n\n"
 		}
 
-		// Update the selection table in case anything changed
-		m.updateSelectionTable()
-
-		// Use the selection table view
-		result += m.selectionTable.View() + "\n\n"
+		// The table already has selection indicators from updateTableWithSelectionIndicators
+		result += m.table.View() + "\n\n"
 	} else {
 		result += m.table.View() + "\n\n"
 	}
