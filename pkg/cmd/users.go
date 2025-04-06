@@ -8,6 +8,7 @@ import (
 
 	"github.com/Reisender/canvas-cli-v2/pkg/api"
 	"github.com/Reisender/canvas-cli-v2/pkg/ui"
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -279,29 +280,8 @@ type MultiActionModel struct {
 	total         int
 	success       int
 	failed        int
-	processing    bool // Flag to indicate removal in progress
-}
-
-// progressBarWidth is the width of the progress bar
-const progressBarWidth = 40
-
-// renderProgressBar creates a visual progress bar
-func renderProgressBar(progress, total int, width int) string {
-	percentage := float64(progress) / float64(total)
-	completeWidth := int(percentage * float64(width))
-
-	// Build the progress bar
-	bar := "["
-	for i := 0; i < width; i++ {
-		if i < completeWidth {
-			bar += "="
-		} else {
-			bar += " "
-		}
-	}
-	bar += "]"
-
-	return fmt.Sprintf("%s %d/%d (%d%%)", bar, progress, total, int(percentage*100))
+	processing    bool           // Flag to indicate removal in progress
+	progressBar   progress.Model // Charmbracelet progress bar
 }
 
 func (m MultiActionModel) Init() tea.Cmd {
@@ -327,6 +307,14 @@ func (m MultiActionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Start removing users
 				m.total = len(m.selectedUsers)
 				m.processing = true
+
+				// Initialize the progress bar
+				p := progress.New(
+					progress.WithDefaultGradient(),
+					progress.WithWidth(40),
+					progress.WithoutPercentage(),
+				)
+				m.progressBar = p
 
 				// Return the model immediately to show the progress bar
 				return m, func() tea.Msg {
@@ -394,6 +382,17 @@ func (m MultiActionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.processing = false
 		return m, nil
 	}
+
+	// Update progress bar if we're processing
+	if m.processing {
+		var cmd tea.Cmd
+		progressModel, cmd := m.progressBar.Update(msg)
+		if updatedProgressBar, ok := progressModel.(progress.Model); ok {
+			m.progressBar = updatedProgressBar
+		}
+		return m, cmd
+	}
+
 	return m, nil
 }
 
@@ -404,7 +403,13 @@ func (m MultiActionModel) View() string {
 
 	if m.processing {
 		s := fmt.Sprintf("\nRemoving %d users from course %s\n\n", m.total, m.courseID)
-		s += renderProgressBar(m.progress, m.total, progressBarWidth) + "\n\n"
+
+		// Calculate progress percentage
+		percent := float64(m.progress) / float64(m.total)
+
+		// Render the progress bar
+		s += m.progressBar.ViewAs(percent) + "\n"
+		s += fmt.Sprintf("%d/%d (%d%%)\n\n", m.progress, m.total, int(percent*100))
 
 		if m.progress > 0 {
 			s += fmt.Sprintf("✅ Success: %d\n", m.success)
