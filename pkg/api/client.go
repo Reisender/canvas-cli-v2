@@ -348,3 +348,19 @@ func (c *Client) CreateAssignment(courseID string, assignment *Assignment) (*Ass
 
 	return &newAssignment, nil
 }
+
+// GetAssignment retrieves a single assignment by ID
+func (c *Client) GetAssignment(courseID, assignmentID string) (*Assignment, error) {
+	path := fmt.Sprintf("/courses/%s/assignments/%s", courseID, assignmentID)
+	data, err := c.Request("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var assignment Assignment
+	if err := json.Unmarshal(data, &assignment); err != nil {
+		return nil, fmt.Errorf("error parsing assignment: %w", err)
+	}
+
+	return &assignment, nil
+}
