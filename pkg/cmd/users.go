@@ -357,9 +357,35 @@ func (m MultiActionModel) View() string {
 
 func runUsersList(courseID string, multiSelect bool) {
 	client := api.NewClient()
-	users, err := client.GetUsers(courseID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error fetching users: %v\n", err)
+
+	// Initialize variables for pagination
+	var allUsers []api.User
+	page := 1
+	perPage := 50
+	moreUsers := true
+
+	// Fetch users with pagination
+	for moreUsers {
+		users, err := client.GetUsers(courseID, page, perPage)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error fetching users: %v\n", err)
+			return
+		}
+
+		// Add users to our collection
+		allUsers = append(allUsers, users...)
+
+		// If we got fewer users than requested, we've reached the end
+		if len(users) < perPage {
+			moreUsers = false
+		} else {
+			page++
+		}
+	}
+
+	// If no users found
+	if len(allUsers) == 0 {
+		fmt.Println("No users found for this course.")
 		return
 	}
 
@@ -372,7 +398,7 @@ func runUsersList(courseID string, multiSelect bool) {
 	}
 
 	rows := []table.Row{}
-	for _, user := range users {
+	for _, user := range allUsers {
 		rows = append(rows, table.Row{
 			fmt.Sprintf("%d", user.ID),
 			user.Name,
@@ -401,7 +427,7 @@ func runUsersList(courseID string, multiSelect bool) {
 	t.SetStyles(s)
 
 	m := ui.NewTableModel(t)
-	m.Title = fmt.Sprintf("Users in Course %s", courseID)
+	m.Title = fmt.Sprintf("Users in Course %s (%d users total)", courseID, len(allUsers))
 
 	if multiSelect {
 		m.EnableMultiSelect()

@@ -158,11 +158,22 @@ func (c *Client) GetAssignments(courseID string) ([]Assignment, error) {
 	return assignments, nil
 }
 
-// GetUsers retrieves users for a course
-func (c *Client) GetUsers(courseID string) ([]User, error) {
+// GetUsers retrieves users for a course with pagination support
+func (c *Client) GetUsers(courseID string, page int, perPage int) ([]User, error) {
 	path := fmt.Sprintf("/courses/%s/users", courseID)
 	query := url.Values{}
 	query.Add("include[]", "email") // Include email addresses
+
+	// Add pagination parameters
+	if page > 0 {
+		query.Add("page", strconv.Itoa(page))
+	}
+	if perPage > 0 {
+		query.Add("per_page", strconv.Itoa(perPage))
+	} else {
+		// Default to 50 per page if not specified
+		query.Add("per_page", "50")
+	}
 
 	data, err := c.Request("GET", path, query)
 	if err != nil {
