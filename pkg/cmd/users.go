@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/Reisender/canvas-cli-v2/pkg/api"
 	"github.com/Reisender/canvas-cli-v2/pkg/ui"
@@ -36,13 +37,20 @@ func NewUsersCmd() *cobra.Command {
 }
 
 func newUsersListCmd() *cobra.Command {
-	return &cobra.Command{
+	var multiSelect bool
+
+	cmd := &cobra.Command{
 		Use:   "list [course-id]",
 		Short: "List users in a course",
 		Long:  `List all users enrolled in a specific Canvas course.`,
 		Args:  cobra.ExactArgs(1),
-		Run:   runUsersList,
+		Run: func(cmd *cobra.Command, args []string) {
+			runUsersList(args[0], multiSelect)
+		},
 	}
+
+	cmd.Flags().BoolVarP(&multiSelect, "multi", "m", false, "Enable multi-selection mode")
+	return cmd
 }
 
 func newUsersViewCmd() *cobra.Command {
@@ -160,8 +168,194 @@ func newEnrollmentsRemoveCmd() *cobra.Command {
 	}
 }
 
-func runUsersList(cmd *cobra.Command, args []string) {
-	courseID := args[0]
+// UserActionModel represents the model for the user action selection screen
+type UserActionModel struct {
+	courseID  string
+	userID    string
+	userName  string
+	choices   []string
+	cursor    int
+	client    *api.Client
+	completed bool
+	result    string
+}
+
+func (m UserActionModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m UserActionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c", "esc":
+			return m, tea.Quit
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(m.choices)-1 {
+				m.cursor++
+			}
+		case "enter":
+			if m.cursor == 0 {
+				// View user details
+				user, err := m.client.GetUserDetails(m.userID)
+				if err != nil {
+					m.result = fmt.Sprintf("Error fetching user details: %v", err)
+				} else {
+					// Format user details in the same way as runUsersView
+					var details strings.Builder
+					details.WriteString("\nUser Details:\n")
+					details.WriteString("-------------\n")
+					details.WriteString(fmt.Sprintf("ID:           %d\n", user.ID))
+					details.WriteString(fmt.Sprintf("Name:         %s\n", user.Name))
+					details.WriteString(fmt.Sprintf("SortableName: %s\n", user.SortableName))
+					details.WriteString(fmt.Sprintf("ShortName:    %s\n", user.ShortName))
+					details.WriteString(fmt.Sprintf("Email:        %s\n", user.Email))
+					details.WriteString(fmt.Sprintf("Login ID:     %s\n", user.LoginID))
+					details.WriteString(fmt.Sprintf("SIS User ID:  %s\n", user.SISUserID))
+					if user.Avatar != "" {
+						details.WriteString(fmt.Sprintf("Avatar URL:   %s\n", user.Avatar))
+					}
+					if user.Locale != "" {
+						details.WriteString(fmt.Sprintf("Locale:       %s\n", user.Locale))
+					}
+					m.result = details.String()
+				}
+				m.completed = true
+				return m, tea.Quit
+			} else if m.cursor == 1 {
+				// Remove user
+				err := m.client.RemoveUserByID(m.courseID, m.userID)
+				if err != nil {
+					m.result = fmt.Sprintf("Error removing user: %v", err)
+				} else {
+					m.result = fmt.Sprintf("Successfully removed user %s (%s) from course %s",
+						m.userID, m.userName, m.courseID)
+				}
+				m.completed = true
+				return m, tea.Quit
+			} else {
+				// Cancel
+				return m, tea.Quit
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m UserActionModel) View() string {
+	if m.completed {
+		return m.result
+	}
+
+	s := fmt.Sprintf("\nUser: %s (ID: %s)\n\n", m.userName, m.userID)
+	s += "What would you like to do?\n\n"
+
+	for i, choice := range m.choices {
+		cursor := " "
+		if m.cursor == i {
+			cursor = ">"
+		}
+		s += fmt.Sprintf("%s %s\n", cursor, choice)
+	}
+
+	s += "\nPress q to quit.\n"
+	return s
+}
+
+// MultiActionModel represents the model for bulk actions on selected users
+type MultiActionModel struct {
+	courseID      string
+	selectedUsers []table.Row
+	choices       []string
+	cursor        int
+	client        *api.Client
+	completed     bool
+	result        string
+	progress      int
+	total         int
+	success       int
+	failed        int
+}
+
+func (m MultiActionModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m MultiActionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c", "esc":
+			return m, tea.Quit
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(m.choices)-1 {
+				m.cursor++
+			}
+		case "enter":
+			if m.cursor == 0 {
+				// Remove all selected users
+				m.total = len(m.selectedUsers)
+
+				var results strings.Builder
+				results.WriteString(fmt.Sprintf("\nRemoving %d users from course %s...\n\n", m.total, m.courseID))
+
+				for _, row := range m.selectedUsers {
+					userID := row[0]
+					userName := row[1]
+
+					err := m.client.RemoveUserByID(m.courseID, userID)
+					if err != nil {
+						results.WriteString(fmt.Sprintf("❌ Failed to remove %s (%s): %v\n", userName, userID, err))
+						m.failed++
+					} else {
+						results.WriteString(fmt.Sprintf("✅ Removed %s (%s)\n", userName, userID))
+						m.success++
+					}
+					m.progress++
+				}
+
+				results.WriteString(fmt.Sprintf("\nSummary: %d/%d users removed successfully\n", m.success, m.total))
+				m.result = results.String()
+				m.completed = true
+				return m, tea.Quit
+			} else {
+				// Cancel
+				return m, tea.Quit
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m MultiActionModel) View() string {
+	if m.completed {
+		return m.result
+	}
+
+	s := fmt.Sprintf("\n%d users selected in course %s\n\n", len(m.selectedUsers), m.courseID)
+	s += "What would you like to do?\n\n"
+
+	for i, choice := range m.choices {
+		cursor := " "
+		if m.cursor == i {
+			cursor = ">"
+		}
+		s += fmt.Sprintf("%s %s\n", cursor, choice)
+	}
+
+	s += "\nPress q to quit.\n"
+	return s
+}
+
+func runUsersList(courseID string, multiSelect bool) {
 	client := api.NewClient()
 	users, err := client.GetUsers(courseID)
 	if err != nil {
@@ -208,7 +402,73 @@ func runUsersList(cmd *cobra.Command, args []string) {
 
 	m := ui.NewTableModel(t)
 	m.Title = fmt.Sprintf("Users in Course %s", courseID)
-	m.Help = "↑/↓: Navigate • enter: Select • q: Quit"
+
+	if multiSelect {
+		m.EnableMultiSelect()
+
+		// Set up the multi-selection callback
+		m.OnMultiSelect = func(selectedRows []table.Row) {
+			// Clear screen
+			fmt.Print("\033[H\033[2J")
+
+			// Create a new model for bulk actions
+			actionModel := MultiActionModel{
+				courseID:      courseID,
+				selectedUsers: selectedRows,
+				choices:       []string{"Remove all selected users", "Cancel"},
+				client:        client,
+			}
+
+			// Run the action program
+			p := tea.NewProgram(actionModel)
+			result, err := p.Run()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error running action program: %v\n", err)
+				return
+			}
+
+			// Get the final model
+			finalModel, ok := result.(MultiActionModel)
+			if ok && finalModel.completed {
+				fmt.Println(finalModel.result)
+			}
+		}
+	} else {
+		// Single selection mode
+		m.Help = "↑/↓: Navigate • enter: Select • q: Quit"
+
+		// Set up the selection callback
+		m.OnSelect = func(row table.Row) {
+			// Clear screen
+			fmt.Print("\033[H\033[2J")
+
+			userID := row[0]
+			userName := row[1]
+
+			// Create a new model for user actions
+			actionModel := UserActionModel{
+				courseID: courseID,
+				userID:   userID,
+				userName: userName,
+				choices:  []string{"View user details", "Remove user from course", "Cancel"},
+				client:   client,
+			}
+
+			// Run the action program
+			p := tea.NewProgram(actionModel)
+			result, err := p.Run()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error running action program: %v\n", err)
+				return
+			}
+
+			// Get the final model
+			finalModel, ok := result.(UserActionModel)
+			if ok && finalModel.completed {
+				fmt.Println(finalModel.result)
+			}
+		}
+	}
 
 	if _, err := tea.NewProgram(m).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running program: %v\n", err)

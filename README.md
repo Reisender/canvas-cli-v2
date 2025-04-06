@@ -70,8 +70,18 @@ canvas-cli assignments list [course-id]
 #### List Users in a Course
 
 ```bash
+# Standard mode - select one user at a time
 canvas-cli users list [course-id]
+
+# Multi-select mode - select multiple users
+canvas-cli users list [course-id] --multi
 ```
+
+In multi-select mode:
+- Use up/down arrow keys to navigate
+- Press space to select/deselect a user
+- Press 'a' to select all users
+- Press enter to show actions for the selected users
 
 #### View User Details
 
@@ -107,17 +117,20 @@ Available enrollment types:
 
 #### Remove a User from a Course
 
-There are two ways to remove a user from a course:
+There are multiple ways to remove users from a course:
 
 ```bash
-# Remove by user ID (easier)
+# Remove a single user by user ID
 canvas-cli users remove [course-id] [user-id]
 
-# Remove by enrollment ID
-canvas-cli users enrollments remove [course-id] [enrollment-id]
+# Interactive removal - list users, select one, and choose "Remove"
+canvas-cli users list [course-id]
+
+# Bulk removal - list users in multi-select mode, select multiple users, and remove them
+canvas-cli users list [course-id] --multi
 ```
 
-Using the `users remove` command is recommended as it only requires the user ID, which is easier to find. The enrollment ID can be found by using the `users enrollments list` command if needed.
+The multi-select mode allows you to select and remove multiple users at once, which is much more efficient than removing them one by one.
 
 ## Development
 
