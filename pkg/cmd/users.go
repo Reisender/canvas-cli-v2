@@ -279,6 +279,29 @@ type MultiActionModel struct {
 	total         int
 	success       int
 	failed        int
+	processing    bool // Flag to indicate removal in progress
+}
+
+// progressBarWidth is the width of the progress bar
+const progressBarWidth = 40
+
+// renderProgressBar creates a visual progress bar
+func renderProgressBar(progress, total int, width int) string {
+	percentage := float64(progress) / float64(total)
+	completeWidth := int(percentage * float64(width))
+
+	// Build the progress bar
+	bar := "["
+	for i := 0; i < width; i++ {
+		if i < completeWidth {
+			bar += "="
+		} else {
+			bar += " "
+		}
+	}
+	bar += "]"
+
+	return fmt.Sprintf("%s %d/%d (%d%%)", bar, progress, total, int(percentage*100))
 }
 
 func (m MultiActionModel) Init() tea.Cmd {
@@ -292,45 +315,84 @@ func (m MultiActionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c", "esc":
 			return m, tea.Quit
 		case "up", "k":
-			if m.cursor > 0 {
+			if !m.processing && m.cursor > 0 {
 				m.cursor--
 			}
 		case "down", "j":
-			if m.cursor < len(m.choices)-1 {
+			if !m.processing && m.cursor < len(m.choices)-1 {
 				m.cursor++
 			}
 		case "enter":
-			if m.cursor == 0 {
-				// Remove all selected users
+			if m.cursor == 0 && !m.processing {
+				// Start removing users
 				m.total = len(m.selectedUsers)
+				m.processing = true
 
-				var results strings.Builder
-				results.WriteString(fmt.Sprintf("\nRemoving %d users from course %s...\n\n", m.total, m.courseID))
-
-				for _, row := range m.selectedUsers {
-					userID := row[0]
-					userName := row[1]
-
-					err := m.client.RemoveUserByID(m.courseID, userID)
-					if err != nil {
-						results.WriteString(fmt.Sprintf("❌ Failed to remove %s (%s): %v\n", userName, userID, err))
-						m.failed++
-					} else {
-						results.WriteString(fmt.Sprintf("✅ Removed %s (%s)\n", userName, userID))
-						m.success++
-					}
-					m.progress++
+				// Return the model immediately to show the progress bar
+				return m, func() tea.Msg {
+					return userRemovalStartMsg{}
 				}
-
-				results.WriteString(fmt.Sprintf("\nSummary: %d/%d users removed successfully\n", m.success, m.total))
-				m.result = results.String()
-				m.completed = true
-				return m, tea.Quit
-			} else {
+			} else if !m.processing {
 				// Cancel
 				return m, tea.Quit
 			}
 		}
+	case userRemovalStartMsg:
+		return m, func() tea.Msg {
+			return userRemovalProgressMsg{
+				index: 0,
+			}
+		}
+	case userRemovalProgressMsg:
+		if m.progress >= m.total {
+			// All done, show results
+			var results strings.Builder
+			results.WriteString(fmt.Sprintf("\nRemoved %d users from course %s\n\n", m.total, m.courseID))
+			results.WriteString(fmt.Sprintf("✅ Success: %d\n", m.success))
+			results.WriteString(fmt.Sprintf("❌ Failed: %d\n", m.failed))
+
+			m.result = results.String()
+			m.completed = true
+			m.processing = false
+			return m, tea.Quit
+		}
+
+		// Process the next user
+		idx := msg.index
+		row := m.selectedUsers[idx]
+		userID := row[0]
+		userName := row[1]
+
+		// Display who's being processed in the result field
+		m.result = fmt.Sprintf("Processing: %s (%s)", userName, userID)
+
+		err := m.client.RemoveUserByID(m.courseID, userID)
+		if err != nil {
+			m.failed++
+		} else {
+			m.success++
+		}
+		m.progress++
+
+		// Process the next user or finish
+		if m.progress < m.total {
+			return m, func() tea.Msg {
+				return userRemovalProgressMsg{
+					index: idx + 1,
+				}
+			}
+		}
+
+		// All done, update the view with the results
+		var results strings.Builder
+		results.WriteString(fmt.Sprintf("\nRemoved %d users from course %s\n\n", m.total, m.courseID))
+		results.WriteString(fmt.Sprintf("✅ Success: %d\n", m.success))
+		results.WriteString(fmt.Sprintf("❌ Failed: %d\n", m.failed))
+
+		m.result = results.String()
+		m.completed = true
+		m.processing = false
+		return m, nil
 	}
 	return m, nil
 }
@@ -338,6 +400,23 @@ func (m MultiActionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m MultiActionModel) View() string {
 	if m.completed {
 		return m.result
+	}
+
+	if m.processing {
+		s := fmt.Sprintf("\nRemoving %d users from course %s\n\n", m.total, m.courseID)
+		s += renderProgressBar(m.progress, m.total, progressBarWidth) + "\n\n"
+
+		if m.progress > 0 {
+			s += fmt.Sprintf("✅ Success: %d\n", m.success)
+			s += fmt.Sprintf("❌ Failed: %d\n", m.failed)
+		}
+
+		// Display current user being processed
+		if !m.completed && m.result != "" {
+			s += "\n" + m.result + "\n"
+		}
+
+		return s
 	}
 
 	s := fmt.Sprintf("\n%d users selected in course %s\n\n", len(m.selectedUsers), m.courseID)
@@ -353,6 +432,12 @@ func (m MultiActionModel) View() string {
 
 	s += "\nPress q to quit.\n"
 	return s
+}
+
+// Message types for handling asynchronous user removal
+type userRemovalStartMsg struct{}
+type userRemovalProgressMsg struct {
+	index int
 }
 
 func runUsersList(courseID string, multiSelect bool) {
