@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/Reisender/canvas-cli-v2/pkg/config"
 )
@@ -306,4 +307,44 @@ func (c *Client) RemoveUserByID(courseID, userID string) error {
 	}
 
 	return nil
+}
+
+// CreateAssignment creates a new assignment in a course
+func (c *Client) CreateAssignment(courseID string, assignment *Assignment) (*Assignment, error) {
+	path := fmt.Sprintf("/courses/%s/assignments", courseID)
+
+	// Create the request body
+	requestBody := map[string]interface{}{
+		"assignment": map[string]interface{}{
+			"name":             assignment.Name,
+			"description":      assignment.Description,
+			"points_possible":  assignment.PointsPossible,
+			"due_at":           assignment.DueAt.Format(time.RFC3339),
+			"published":        assignment.Published,
+			"grading_type":     assignment.GradingType,
+			"submission_types": assignment.SubmissionTypes,
+		},
+	}
+
+	// For optional time fields, only include them if they are set
+	if !assignment.UnlockAt.IsZero() {
+		requestBody["assignment"].(map[string]interface{})["unlock_at"] = assignment.UnlockAt.Format(time.RFC3339)
+	}
+	if !assignment.LockAt.IsZero() {
+		requestBody["assignment"].(map[string]interface{})["lock_at"] = assignment.LockAt.Format(time.RFC3339)
+	}
+
+	// Make the API request
+	data, err := c.RequestWithBody("POST", path, nil, requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("error creating assignment: %w", err)
+	}
+
+	// Parse the response
+	var newAssignment Assignment
+	if err := json.Unmarshal(data, &newAssignment); err != nil {
+		return nil, fmt.Errorf("error parsing assignment response: %w", err)
+	}
+
+	return &newAssignment, nil
 }
