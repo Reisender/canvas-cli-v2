@@ -103,7 +103,7 @@ func (m *TableModel) updateTableWithSelectionIndicators() {
 
 	// Get current table dimensions
 	height := m.table.Height()
-	height = 100
+	height = 25
 
 	// Create new rows with checkmarks
 	newRows := make([]table.Row, len(m.baseRows))
@@ -198,7 +198,7 @@ func (m *TableModel) EnableMultiSelect() {
 	m.Help = "↑/↓: Navigate • space: Select/Deselect • a: Select All • enter: Perform Action on Selected • q: Quit"
 
 	// Create a fixed-height table
-	fixedHeight := 100 // Use a consistent height value
+	fixedHeight := 25 // Use a consistent height value
 	newTable := table.New(
 		table.WithColumns(m.table.Columns()),
 		table.WithRows(m.table.Rows()),
